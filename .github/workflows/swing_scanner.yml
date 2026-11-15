@@ -2,6 +2,8 @@ name: TradeFlow Swing Scanner
 
 on:
   schedule:
+    # 05:30 UTC = 11:00 AM IST (Monday - Friday) -> Morning Momentum Scan
+    - cron: '30 5 * * 1-5'
     # 09:45 UTC = 3:15 PM IST (Monday - Friday) -> Pre-Close / BTST Entry Window
     - cron: '45 9 * * 1-5'
     # 12:00 UTC = 5:30 PM IST (Monday - Friday) -> EOD Complete Session & FII/DII Release
@@ -25,11 +27,19 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r scanner/requirements.txt
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "scanner/requirements.txt" ]; then
+            pip install -r scanner/requirements.txt
+          fi
 
       - name: Execute Swing Scanner & Send Telegram Alert
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python scanner/swing_scanner.py
+          if [ -f "swing_scanner.py" ]; then
+            python swing_scanner.py
+          elif [ -f "scanner/swing_scanner.py" ]; then
+            python scanner/swing_scanner.py
+          fi
