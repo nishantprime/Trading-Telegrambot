@@ -1,10 +1,15 @@
 """
-TradeFlow - Upgraded Swing Scanner & Telegram Alert Dispatcher
+TradeFlow - Upgraded Swing Scanner & Telegram Alert Dispatcher (v2.0)
 Features:
-  1. Priority Watchlist & Liquid Momentum Basket Scan (20 EMA Pullback, Volume, Relative Strength)
-  2. Official NSE Daily FII & DII Institutional Net Flows
-  3. Real-Time Market-Moving Macro Headlines
-  4. Automatic Position Sizing to enforce the ₹600 max loss rule
+  1. Top 7 Liquid Swing Candidates across 28 high-volume NSE leaders
+  2. Multi-tier Setup Engine:
+     - 20 EMA Pullback Bounce (Golden Swing Entry)
+     - High-Volume Momentum Continuation (Breakout)
+     - 50 EMA Support Defense (Swing Reversal)
+     - Relative Strength Momentum Outperformer (Leading Nifty)
+  3. Automatic Position Sizing to enforce the ₹600 max loss rule (Rule 1)
+  4. Real-time FII & DII Institutional Flows with cloud fallback
+  5. Live Macro Headlines from Indian Financial Markets
 Dispatches clean executive summary to Telegram via Bot API.
 """
 
@@ -25,14 +30,20 @@ except ImportError:
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# User's Priority Watchlist & High-Probability Liquid Swing Basket (All Verified on NSE)
+# 28 High-Volume Liquid Momentum & Swing Leaders on NSE (All Verified)
 WATCHLIST_SYMBOLS = [
-    # User's target watchlist
+    # User's Core Watchlist
     "TATASTEEL.NS", "BHEL.NS", "JSWINFRA.NS", "COALINDIA.NS",
     "NMDC.NS", "AMBUJACEM.NS", "PARADEEP.NS", "MOTISONS.NS",
-    # Liquid momentum peers
-    "SAIL.NS", "BEL.NS", "TATAPOWER.NS", "HINDALCO.NS",
-    "NTPC.NS", "GMRAIRPORT.NS", "NATIONALUM.NS", "IRFC.NS"
+    # Core Metals & Commodity Cyclicals
+    "SAIL.NS", "HINDALCO.NS", "NATIONALUM.NS", "JINDALSTEL.NS", "VEDL.NS",
+    # High-Beta Defense, Infra & Railways
+    "BEL.NS", "HAL.NS", "IRFC.NS", "RVNL.NS",
+    # Power & Energy Capex Momentum
+    "TATAPOWER.NS", "NTPC.NS", "POWERGRID.NS", "GMRAIRPORT.NS", "ADANIPORTS.NS",
+    # Liquid Momentum Leaders
+    "DELHIVERY.NS", "POLICYBZR.NS", "SBIN.NS", "ICICIBANK.NS",
+    "RELIANCE.NS", "BHARTIARTL.NS"
 ]
 
 BENCHMARK_SYMBOL = "^NSEI"  # Nifty 50 Index
@@ -92,26 +103,28 @@ def fetch_market_news(limit: int = 3) -> list:
 
 def fetch_fii_dii_flow() -> dict:
     """
-    Fetch official daily FII / DII net flow data directly from NSE India.
+    Fetch official daily FII / DII net flow data directly from NSE India with robust fallback.
     """
     flow_data = {
         "fii_net": 0.0,
         "dii_net": 0.0,
         "date": datetime.now().strftime("%d %b"),
-        "sentiment": "Neutral"
+        "sentiment": "Neutral",
+        "source": "NSE Official"
     }
 
+    # Attempt 1: Direct NSE session scrape
     try:
         session = requests.Session()
         session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br"
+            "Referer": "https://www.nseindia.com/reports/fii-dii"
         })
 
-        # Prime cookies
-        session.get("https://www.nseindia.com", timeout=10)
-        resp = session.get("https://www.nseindia.com/api/fiidiiTradeReact", timeout=10)
+        session.get("https://www.nseindia.com", timeout=8)
+        resp = session.get("https://www.nseindia.com/api/fiidiiTradeReact", timeout=8)
 
         if resp.status_code == 200:
             data = resp.json()
@@ -124,39 +137,57 @@ def fetch_fii_dii_flow() -> dict:
                     flow_data["fii_net"] = net_val
                 elif "DII" in cat:
                     flow_data["dii_net"] = net_val
+            logging.info(f"NSE FII/DII successfully scraped: {flow_data['date']}")
     except Exception as e:
-        logging.warning(f"Could not fetch direct NSE FII/DII: {e}")
+        logging.warning(f"Direct NSE FII/DII failed: {e}. Trying fallback...")
+
+    # Attempt 2: If values are 0 (e.g. weekend or cloud IP blocked), parse financial news feed
+    if flow_data["fii_net"] == 0.0 and flow_data["dii_net"] == 0.0:
+        try:
+            feed_url = "https://news.google.com/rss/search?q=FII+DII+cash+market+data+crores+NSE&hl=en-IN&gl=IN&ceid=IN:en"
+            resp = requests.get(feed_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+            root = ET.fromstring(resp.content)
+            items = root.findall(".//item")
+            for it in items[:3]:
+                t = it.find("title").text
+                if "FII" in t and "crore" in t.lower():
+                    flow_data["sentiment"] = f"Recent Flow: {t[:80]}..."
+                    flow_data["source"] = "Financial Wire"
+                    break
+        except Exception:
+            pass
 
     fii = flow_data["fii_net"]
     dii = flow_data["dii_net"]
 
-    if fii > 500 and dii > 0:
-        flow_data["sentiment"] = "🟢 Strong Confluence (Both Buying)"
-    elif fii > 0 and dii <= 0:
-        flow_data["sentiment"] = "🟢 FII Inflow Driven (Bullish Momentum)"
-    elif fii > 0 and dii > 0:
-        flow_data["sentiment"] = "🟢 Net Institutional Inflows"
-    elif fii < -1500 and dii > 0:
-        flow_data["sentiment"] = "🟡 Choppy (FII Dumping, DII Absorbing)"
-    elif fii < 0 and dii < 0:
-        flow_data["sentiment"] = "🔴 High Risk / Defensive (Both Selling)"
-    else:
-        flow_data["sentiment"] = "⚪ Neutral Market Flow"
+    if flow_data["sentiment"] == "Neutral":
+        if fii > 500 and dii > 0:
+            flow_data["sentiment"] = "🟢 Strong Confluence (Both Buying)"
+        elif fii > 0 and dii <= 0:
+            flow_data["sentiment"] = "🟢 FII Inflow Driven (Bullish Momentum)"
+        elif fii > 0 and dii > 0:
+            flow_data["sentiment"] = "🟢 Net Institutional Inflows"
+        elif fii < -1500 and dii > 0:
+            flow_data["sentiment"] = "🟡 Choppy (FII Dumping, DII Absorbing)"
+        elif fii < 0 and dii < 0:
+            flow_data["sentiment"] = "🔴 High Risk / Defensive (Both Selling)"
+        else:
+            flow_data["sentiment"] = "⚪ Neutral / Weekend Market Flow"
 
     return flow_data
 
 
 def scan_swing_setups() -> list:
     """
-    Downloads daily data for the watchlist and scores them on:
-      1. Stage-2 Trend: Price > 20 EMA > 50 EMA
-      2. 20 EMA Pullback: Close within 0.0% to 3.0% above 20 EMA
-      3. Relative Volume (RVOL): Volume > 1.0x of 20-day average
-      4. Relative Strength (RS): 5-day return outperforming Nifty 50
+    Downloads daily data for the 28 liquid stocks and ranks the Top 7 candidates across 4 tiers:
+      Tier 1: 20 EMA Pullback Bounce (Golden Swing Entry)
+      Tier 2: High-Volume Momentum Continuation (Breakout)
+      Tier 3: 50 EMA Support Defense (Swing Reversal)
+      Tier 4: Relative Strength Outperformer (Leading Nifty)
     """
     candidates = []
 
-    # Fetch benchmark return for RS comparison
+    # Benchmark return
     nifty_5d_return = 0.0
     try:
         bench_df = yf.download(BENCHMARK_SYMBOL, period="1mo", interval="1d", progress=False)
@@ -166,7 +197,7 @@ def scan_swing_setups() -> list:
     except Exception as e:
         logging.warning(f"Benchmark fetch failed: {e}")
 
-    logging.info(f"Scanning {len(WATCHLIST_SYMBOLS)} liquid swing candidates...")
+    logging.info(f"Scanning {len(WATCHLIST_SYMBOLS)} liquid momentum candidates...")
 
     for sym in WATCHLIST_SYMBOLS:
         clean_name = sym.replace(".NS", "")
@@ -207,21 +238,30 @@ def scan_swing_setups() -> list:
             ], axis=1).max(axis=1)
             atr14 = float(tr.rolling(14).mean().iloc[-1])
 
-            # Filter Criteria
+            # Trend & Distances
             is_uptrend = curr_price >= curr_ema20 and curr_ema20 >= curr_ema50
             dist_to_ema20 = ((curr_price - curr_ema20) / curr_ema20) * 100.0
+            dist_to_ema50 = ((curr_price - curr_ema50) / curr_ema50) * 100.0
 
             setup_type = None
+            setup_priority = 0
 
-            # Setup A: 20 EMA Pullback Bounce (Buy near support)
-            if is_uptrend and (0.0 <= dist_to_ema20 <= 3.2):
-                setup_type = "20 EMA Support Bounce"
-            # Setup B: High-Volume Momentum Continuation
-            elif is_uptrend and rvol >= 1.25 and (day_change >= 0.5):
-                setup_type = "Momentum Volume Continuation"
-            # Setup C: 50 EMA Institutional Defense
-            elif (curr_price >= curr_ema50) and (abs(curr_price - curr_ema50) / curr_ema50 <= 0.025) and (day_change >= -1.0):
+            # Tier 1: 20 EMA Support Pullback (Golden Setup)
+            if is_uptrend and (0.0 <= dist_to_ema20 <= 3.5):
+                setup_type = "20 EMA Support Pullback"
+                setup_priority = 100 + (rvol * 10) + rs_score
+            # Tier 2: High-Volume Momentum Continuation
+            elif is_uptrend and rvol >= 1.2 and (day_change >= 0.4):
+                setup_type = "High-Volume Momentum Breakout"
+                setup_priority = 80 + (rvol * 10) + rs_score
+            # Tier 3: 50 EMA Support Defense
+            elif (curr_price >= curr_ema50) and (abs(dist_to_ema50) <= 3.5):
                 setup_type = "50 EMA Support Defense"
+                setup_priority = 60 + (rvol * 5) + rs_score
+            # Tier 4: Strong Relative Strength Outperformer
+            elif rs_score > 3.0 and (curr_price >= curr_ema50):
+                setup_type = "Relative Strength Leader"
+                setup_priority = 40 + rs_score
 
             if setup_type:
                 # Stop loss at recent 4-day low or 1.25x ATR below entry
@@ -238,6 +278,7 @@ def scan_swing_setups() -> list:
                         "price": round(curr_price, 2),
                         "day_change": round(day_change, 2),
                         "setup": setup_type,
+                        "priority": setup_priority,
                         "ema20": round(curr_ema20, 2),
                         "rvol": rvol,
                         "rs": round(rs_score, 1),
@@ -250,13 +291,13 @@ def scan_swing_setups() -> list:
             logging.debug(f"Error scanning {sym}: {e}")
             continue
 
-    # Sort candidates by Relative Volume & Relative Strength
-    candidates.sort(key=lambda x: (x["rvol"] * 1.5 + x["rs"]), reverse=True)
-    return candidates[:5]  # Top 5 clean setups
+    # Sort candidates strictly by priority score
+    candidates.sort(key=lambda x: x["priority"], reverse=True)
+    return candidates[:7]  # TOP 7 HIGHEST QUALITY SETUPS
 
 
 def build_telegram_report(candidates: list, flow: dict, news: list) -> str:
-    """Build a crisp, executive Telegram HTML message."""
+    """Build a crisp, executive Telegram HTML message with Top 7 setups."""
     now_ist = datetime.now(timezone.utc).strftime("%d %b %Y | %H:%M UTC")
 
     fii_str = f"+₹{flow['fii_net']:,.1f} Cr" if flow['fii_net'] >= 0 else f"-₹{abs(flow['fii_net']):,.1f} Cr"
@@ -267,12 +308,16 @@ def build_telegram_report(candidates: list, flow: dict, news: list) -> str:
 
     # 1. FII / DII Flow
     msg += f"<b>🏛️ INSTITUTIONAL FLOW (FII / DII)</b>\n"
-    msg += f"• <b>FII Net:</b> {fii_str}\n"
-    msg += f"• <b>DII Net:</b> {dii_str}\n"
-    msg += f"• <b>Regime:</b> {flow['sentiment']} <i>({flow['date']})</i>\n\n"
+    if flow['fii_net'] != 0.0 or flow['dii_net'] != 0.0:
+        msg += f"• <b>FII Net:</b> {fii_str}\n"
+        msg += f"• <b>DII Net:</b> {dii_str}\n"
+        msg += f"• <b>Regime:</b> {flow['sentiment']} <i>({flow['date']})</i>\n\n"
+    else:
+        msg += f"• <b>Status:</b> {flow['sentiment']}\n"
+        msg += f"• <i>(Official cash market data updates on trading day evenings)</i>\n\n"
 
-    # 2. Top Swing Candidates
-    msg += f"<b>🎯 TOP SWING CANDIDATES</b>\n"
+    # 2. Top 7 Swing Candidates
+    msg += f"<b>🎯 TOP 7 SWING CANDIDATES</b>\n"
     if candidates:
         for i, c in enumerate(candidates, 1):
             sign = "+" if c['day_change'] >= 0 else ""
@@ -281,7 +326,7 @@ def build_telegram_report(candidates: list, flow: dict, news: list) -> str:
             msg += f"   🛑 <b>SL:</b> ₹{c['stop_loss']} (Risk: ₹{c['risk_per_share']}) | 🎯 <b>Target:</b> ₹{c['target']}\n"
             msg += f"   🛡️ <b>Max Size:</b> {c['max_shares']} shares <i>(₹{MAX_LOSS_BUDGET:.0f} max risk rule)</i>\n\n"
     else:
-        msg += f"<i>No low-risk setups meeting strict 20 EMA + volume confluence today. Cash is also a position!</i>\n\n"
+        msg += f"<i>No low-risk setups meeting strict confluence today. Cash is also a position!</i>\n\n"
 
     # 3. Market News
     msg += f"<b>📰 KEY MARKET HEADLINES</b>\n"
@@ -301,7 +346,7 @@ def main():
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
-    logging.info("Starting TradeFlow Upgraded Swing Scan...")
+    logging.info("Starting TradeFlow Upgraded Swing Scan (Top 7 Mode)...")
 
     flow = fetch_fii_dii_flow()
     news = fetch_market_news(limit=3)
