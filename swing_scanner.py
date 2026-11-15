@@ -41,8 +41,8 @@ WATCHLIST_SYMBOLS = [
     "BEL.NS", "HAL.NS", "IRFC.NS", "RVNL.NS",
     # Power & Energy Capex Momentum
     "TATAPOWER.NS", "NTPC.NS", "POWERGRID.NS", "GMRAIRPORT.NS", "ADANIPORTS.NS",
-    # Liquid Momentum Leaders
-    "DELHIVERY.NS", "POLICYBZR.NS", "SBIN.NS", "ICICIBANK.NS",
+    # Liquid Momentum & Platform Leaders (including ETERNAL / formerly Zomato)
+    "ETERNAL.NS", "DELHIVERY.NS", "POLICYBZR.NS", "SBIN.NS", "ICICIBANK.NS",
     "RELIANCE.NS", "BHARTIARTL.NS"
 ]
 
@@ -207,11 +207,13 @@ def scan_swing_setups() -> list:
                 continue
 
             close = df["Close"].squeeze()
+            open_p = df["Open"].squeeze()
             high = df["High"].squeeze()
             low = df["Low"].squeeze()
             vol = df["Volume"].squeeze()
 
             curr_price = float(close.iloc[-1])
+            curr_open = float(open_p.iloc[-1])
             prev_price = float(close.iloc[-2])
             day_change = ((curr_price - prev_price) / prev_price) * 100.0
 
@@ -226,6 +228,11 @@ def scan_swing_setups() -> list:
             curr_vol = float(vol.iloc[-1])
             rvol = round(curr_vol / avg_vol20, 2) if avg_vol20 > 0 else 1.0
 
+            # Intraday Candle Geometry (Rejection wick & green vs red)
+            is_green = curr_price >= curr_open
+            range_span = float(high.iloc[-1]) - float(low.iloc[-1])
+            wick_ratio = (curr_price - float(low.iloc[-1])) / range_span if range_span > 0 else 0.5
+
             # 5-day Relative Strength vs Nifty
             stock_5d_return = ((curr_price - float(close.iloc[-6])) / float(close.iloc[-6])) * 100.0 if len(close) >= 6 else 0.0
             rs_score = stock_5d_return - nifty_5d_return
@@ -238,6 +245,13 @@ def scan_swing_setups() -> list:
             ], axis=1).max(axis=1)
             atr14 = float(tr.rolling(14).mean().iloc[-1])
 
+            # HARD FILTER: Block High-Volume Sell-offs / Knife Falling
+            # If a stock is dumping (-1% or worse) with high volume (> 1.1x) and closing on its lows (wick < 0.35),
+            # it is Institutional Liquidation/Distribution - NEVER buy into heavy selling!
+            if (day_change < -1.0) and (rvol > 1.1) and (wick_ratio < 0.35):
+                logging.info(f"Disqualified {clean_name}: Heavy distribution (Day: {day_change:.2f}%, RVOL: {rvol}x)")
+                continue
+
             # Trend & Distances
             is_uptrend = curr_price >= curr_ema20 and curr_ema20 >= curr_ema50
             dist_to_ema20 = ((curr_price - curr_ema20) / curr_ema20) * 100.0
@@ -246,22 +260,33 @@ def scan_swing_setups() -> list:
             setup_type = None
             setup_priority = 0
 
-            # Tier 1: 20 EMA Support Pullback (Golden Setup)
+            # Tier 1: 20 EMA Pullback
             if is_uptrend and (0.0 <= dist_to_ema20 <= 3.5):
-                setup_type = "20 EMA Support Pullback"
-                setup_priority = 100 + (rvol * 10) + rs_score
-            # Tier 2: High-Volume Momentum Continuation
+                if is_green or wick_ratio >= 0.35:
+                    setup_type = "20 EMA Reversal Bounce"
+                    setup_priority = 85 + (1.0 / max(rvol, 0.2)) * 3 + rs_score
+                elif rvol <= 0.85:
+                    setup_type = "20 EMA Low-Vol Pullback"
+                    setup_priority = 75 + (1.0 / max(rvol, 0.2)) * 3 + rs_score
+
+            # Tier 2: High-Volume Momentum Continuation (Breakout)
             elif is_uptrend and rvol >= 1.2 and (day_change >= 0.4):
                 setup_type = "High-Volume Momentum Breakout"
-                setup_priority = 80 + (rvol * 10) + rs_score
+                setup_priority = 80 + (rvol * 5) + rs_score
+
             # Tier 3: 50 EMA Support Defense
             elif (curr_price >= curr_ema50) and (abs(dist_to_ema50) <= 3.5):
-                setup_type = "50 EMA Support Defense"
-                setup_priority = 60 + (rvol * 5) + rs_score
+                if is_green or wick_ratio >= 0.35:
+                    setup_type = "50 EMA Support Defense"
+                    setup_priority = 65 + (1.0 / max(rvol, 0.2)) * 3 + rs_score
+                elif rvol <= 0.85:
+                    setup_type = "50 EMA Low-Vol Contraction"
+                    setup_priority = 55 + (1.0 / max(rvol, 0.2)) * 3 + rs_score
+
             # Tier 4: Strong Relative Strength Outperformer
-            elif rs_score > 3.0 and (curr_price >= curr_ema50):
+            elif rs_score > 3.0 and (curr_price >= curr_ema50) and (day_change >= -0.5 or rvol <= 0.85):
                 setup_type = "Relative Strength Leader"
-                setup_priority = 40 + rs_score
+                setup_priority = 45 + rs_score
 
             if setup_type:
                 # Stop loss at recent 4-day low or 1.25x ATR below entry
@@ -280,6 +305,7 @@ def scan_swing_setups() -> list:
                         "setup": setup_type,
                         "priority": setup_priority,
                         "ema20": round(curr_ema20, 2),
+                        "ema50": round(curr_ema50, 2),
                         "rvol": rvol,
                         "rs": round(rs_score, 1),
                         "stop_loss": stop_loss,
@@ -322,7 +348,8 @@ def build_telegram_report(candidates: list, flow: dict, news: list) -> str:
         for i, c in enumerate(candidates, 1):
             sign = "+" if c['day_change'] >= 0 else ""
             msg += f"<b>{i}. {c['symbol']} — ₹{c['price']}</b> ({sign}{c['day_change']}%)\n"
-            msg += f"   ⚡ <i>{c['setup']}</i> (RVOL: {c['rvol']}x | RS: {c['rs']})\n"
+            msg += f"   ⚡ <i>{c['setup']}</i> [20 EMA: ₹{c['ema20']} | 50 EMA: ₹{c['ema50']}]\n"
+            msg += f"   📊 <b>RVOL:</b> {c['rvol']}x | <b>RS:</b> {c['rs']}\n"
             msg += f"   🛑 <b>SL:</b> ₹{c['stop_loss']} (Risk: ₹{c['risk_per_share']}) | 🎯 <b>Target:</b> ₹{c['target']}\n"
             msg += f"   🛡️ <b>Max Size:</b> {c['max_shares']} shares <i>(₹{MAX_LOSS_BUDGET:.0f} max risk rule)</i>\n\n"
     else:
