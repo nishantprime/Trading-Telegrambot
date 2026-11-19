@@ -45,8 +45,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 BENCHMARK_SYMBOL = "^NSEI"
 
 # --- Risk & Sizing Parameters (Short-Term NSE Delivery Swings) ---
-MAX_LOSS_BUDGET = float(os.environ.get("MAX_LOSS_BUDGET", "600.0"))         # Max risk per trade in INR
-MAX_CAPITAL_PER_TRADE = float(os.environ.get("MAX_CAPITAL_PER_TRADE", "25000.0"))  # Max deployed capital per trade
+MAX_LOSS_BUDGET = float(os.environ.get("MAX_LOSS_BUDGET", "700.0"))         # Max risk per trade in INR
+MAX_CAPITAL_PER_TRADE = float(os.environ.get("MAX_CAPITAL_PER_TRADE", "40000.0"))  # Max deployed capital per trade
 NSE_DELIVERY_FEE_RATE = 0.0022   # ~0.22% round-trip (0.20% STT + stamp + exchange + SEBI + GST)
 DP_CHARGE_INR = 16.0             # CDSL/NSDL sell-side depository charge
 
