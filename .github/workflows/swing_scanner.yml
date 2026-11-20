@@ -1,15 +1,8 @@
 name: TradeFlow Swing Scanner
 
 on:
-  schedule:
-    # Odd minutes reduce top-of-hour GitHub Actions queue congestion
-    # 05:37 UTC = 11:07 AM IST (Mon-Fri) -> Morning Momentum Scan
-    - cron: '37 5 * * 1-5'
-    # 09:33 UTC = 3:03 PM IST (Mon-Fri) -> Pre-Close / BTST Scan
-    - cron: '33 9 * * 1-5'
-    # 13:32 UTC = 7:02 PM IST (Mon-Fri) -> EOD Session + Confirmed FII/DII Release
-    - cron: '32 13 * * 1-5'
   workflow_dispatch:
+  # Internal GitHub schedule removed — cron-job.org triggers workflow_dispatch on-time!
     inputs:
       scan_mode:
         description: 'Optional session mode override (auto, MORNING, BTST, EOD)'
