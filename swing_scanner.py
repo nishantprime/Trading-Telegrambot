@@ -76,7 +76,7 @@ FALLBACK_UNIVERSE: dict[str, str] = {
     "SBIN": "Financial Services", "ICICIBANK": "Financial Services", "HDFCBANK": "Financial Services",
     "BAJFINANCE": "Financial Services", "POLICYBZR": "Financial Services",
     "RELIANCE": "Oil Gas & Fuels", "BHARTIARTL": "Telecom", "ETERNAL": "Consumer Services",
-    "TRENT": "Consumer Services", "M&M": "Automobile", "TATAMOTORS": "Automobile", "BAJAJ-AUTO": "Automobile",
+    "TRENT": "Consumer Services", "M&M": "Automobile", "BAJAJ-AUTO": "Automobile",
     "SUNPHARMA": "Healthcare", "CIPLA": "Healthcare", "LUPIN": "Healthcare",
     "TCS": "IT", "INFY": "IT", "PERSISTENT": "IT", "AMBUJACEM": "Construction Materials",
 }
